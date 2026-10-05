@@ -26,6 +26,8 @@ static int vpr_init(void)
 	 */
 	nrf_vpr_csr_rtperiph_enable_set(true);
 
+	//nrf_vpr_csr_hw_stacking_type_set(NRF_VPR_CSR_HW_STACKING_TYPE_AUTOSTACK1F0NOFIT);
+
 #if DT_NODE_HAS_PROP(DT_NODELABEL(cpu), nordic_vpr_ready_event)
 	/* Notify parent core that core is ready and can accept IPC communication. */
 	nrf_vpr_csr_vevif_events_set(BIT(DT_PROP(DT_NODELABEL(cpu), nordic_vpr_ready_event)));

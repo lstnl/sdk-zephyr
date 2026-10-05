@@ -36,7 +36,7 @@
  */
 
 #include <zephyr/kernel.h>
-
+#include <hal/nrf_vpr_csr.h>
 #if defined(CONFIG_STDOUT_CONSOLE)
 #include <stdio.h>
 #else
@@ -244,9 +244,12 @@ static void start_threads(void)
 
 static void display_demo_description(void)
 {
+	//printk("********HW stacking state %d\n", nrf_vpr_csr_hw_stacking_disable_check());
 #if !DEBUG_PRINTF
 	printk(DEMO_DESCRIPTION);
 #endif
+	//nrf_vpr_csr_hw_stacking_disable_set(true);
+	printk("********HW stacking state %d\n", nrf_vpr_csr_hw_stacking_type_get());
 }
 
 int main(void)

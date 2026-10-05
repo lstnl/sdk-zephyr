@@ -686,6 +686,30 @@ is_interrupt:
 2:
 #endif /* CONFIG_PMP_KERNEL_MODE_DYNAMIC */
 
+#if defined(CONFIG_RISCV_SOC_HAS_ISR_STACKING) && defined(SOC_ISR_MASK_CRITICAL_SECTION)
+	/*
+	 * Same issue as the irq_done/no_reschedule/MRET tail (see the big
+	 * comment above SOC_ISR_MASK_CRITICAL_SECTION's definition), but on
+	 * entry: the read-modify-write of _current_cpu->nested below, and
+	 * the "switch to IRQ stack" bookkeeping that follows it, are not
+	 * atomic and can themselves be preempted by another CLIC interrupt
+	 * (preemption here is gated only by MINTTHRESH/priority, not by
+	 * MSTATUS.MIE). If that happens, the new interrupt can read a stale
+	 * pre-increment `nested` value and race the outer interrupt's own
+	 * write to it (lost update), or worse, complete its own IRQ-stack
+	 * switch using the outer interrupt's still in-flight sp. Mask here
+	 * and restore the real value in on_irq_stack, right before the
+	 * actual (legitimately preemptable) ISR body runs. `ra` is free
+	 * here (no CONFIG_PMP_KERNEL_MODE_DYNAMIC/CUSTOM_STACK_GUARD calls
+	 * happen before on_irq_stack) so it's used to carry the real value
+	 * across the stack switch, after which sp no longer addresses the
+	 * ESF.
+	 */
+	lr ra, __struct_arch_esf_soc_context_OFFSET(sp)
+	li t0, 0xFF
+	csrw 0x347, t0
+#endif
+
 	/* Increment _current_cpu->nested */
 	lw t1, ___cpu_t_nested_OFFSET(s0)
 	addi t2, t1, 1
@@ -715,6 +739,13 @@ is_interrupt:
 #endif /* CONFIG_CUSTOM_STACK_GUARD */
 
 on_irq_stack:
+
+#if defined(CONFIG_RISCV_SOC_HAS_ISR_STACKING) && defined(SOC_ISR_MASK_CRITICAL_SECTION)
+	/* Restore the real threshold cached in `ra` above; the actual ISR
+	 * body below is meant to remain preemptable by higher-priority
+	 * CLIC interrupts. */
+	csrw 0x347, ra
+#endif
 
 #ifdef CONFIG_RISCV_SOC_HAS_CUSTOM_IRQ_HANDLING
 	call __soc_handle_all_irqs
@@ -766,6 +797,20 @@ on_irq_stack:
 #endif
 
 irq_done:
+#if defined(CONFIG_RISCV_SOC_HAS_ISR_STACKING) && defined(SOC_ISR_MASK_CRITICAL_SECTION)
+	/*
+	 * See the big comment above SOC_ISR_MASK_CRITICAL_SECTION's
+	 * definition: on this SoC, interrupt handling remains fully
+	 * preemptable by CLIC priority right up to MRET, unlike classic
+	 * RISC-V + PLIC cores. From here through the eventual MRET in
+	 * no_reschedule/SOC_ISR_SW_UNSTACKING, _current_cpu->nested and/or
+	 * sp can be in a transient, not-yet-consistent state (e.g. right
+	 * after being decremented to 0 below, before we've actually
+	 * returned). Mask further preemption now; the real threshold is
+	 * restored in the last instant before MRET.
+	 */
+	SOC_ISR_MASK_CRITICAL_SECTION
+#endif
 	/* Decrement _current_cpu->nested */
 	lw t2, ___cpu_t_nested_OFFSET(s0)
 	addi t2, t2, -1
@@ -833,6 +878,15 @@ no_reschedule:
 	/* Restore context at SOC level */
 	addi a0, sp, __struct_arch_esf_soc_context_OFFSET
 	jal ra, __soc_restore_context
+#if defined(CONFIG_RISCV_SOC_HAS_ISR_STACKING) && defined(SOC_ISR_MASK_CRITICAL_SECTION)
+	/*
+	 * __soc_restore_context() just wrote the real/original MINTTHRESH
+	 * back from the ESF, prematurely ending the masking started in
+	 * irq_done. Re-mask; SOC_ISR_SW_UNSTACKING writes the real value
+	 * back in the last instant before MRET.
+	 */
+	SOC_ISR_MASK_CRITICAL_SECTION
+#endif
 #endif /* CONFIG_RISCV_SOC_CONTEXT_SAVE */
 
 #if defined(CONFIG_FPU_SHARING)
